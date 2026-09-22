@@ -41,12 +41,35 @@ function notifyAgentSettled(
   ]);
 }
 
+// Notify when a question requires an answer.
+function notifyQuestionAsked(
+  runCommand: (file: string, args: string[]) => unknown,
+  sessionTitle: string,
+  question: string,
+) {
+  runCommand("terminal-notifier", [
+    "-title",
+    "Pi",
+    "-subtitle",
+    sessionTitle,
+    "-message",
+    question ? `Question asked: ${question}` : "Question asked",
+    "-sound",
+    "Submarine",
+  ]);
+}
+
 // Register completion notifications with Pi.
 export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   if (dependencies.isSubagent ?? process.env.PI_SUBAGENT_CHILD === "1") return;
 
   const runCommand = dependencies.execFile ?? execFile;
   let latestResponse = "";
+  let sessionId = "";
+
+  pi.on("session_start", (_event, ctx) => {
+    sessionId = ctx.sessionManager.getSessionId().slice(0, 7);
+  });
 
   pi.on("agent_start", () => {
     latestResponse = "";
@@ -61,5 +84,12 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     const sessionName = pi.getSessionName()?.trim();
     const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
     notifyAgentSettled(runCommand, sessionTitle, latestResponse);
+  });
+
+  pi.events.on("rpiv:ask-user:prompt", (raw) => {
+    const event = raw as { questions?: Array<{ question?: unknown }> };
+    const question = event.questions?.[0]?.question;
+    const sessionTitle = pi.getSessionName()?.trim() || sessionId;
+    notifyQuestionAsked(runCommand, sessionTitle, typeof question === "string" ? question : "");
   });
 }
