@@ -116,6 +116,28 @@ test("notifies when ask-user-question presents a question", () => {
   ]]);
 });
 
+test("suppresses workflow-child completion notifications", () => {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const commands: Array<[string, string[]]> = [];
+  const pi = {
+    getSessionName: () => "Workflow tests",
+    on: (event: string, handler: (...args: unknown[]) => void) => handlers.set(event, handler),
+    events: { on: () => {} },
+  };
+
+  notifier(pi as never, {
+    execFile: (file, args) => commands.push([file, args]),
+    isSubagent: false,
+  });
+  handlers.get("before_agent_start")?.({ prompt: "Workflow child completed: Reuters report" });
+  handlers.get("agent_start")?.();
+  handlers.get("agent_settled")?.(undefined, {
+    sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+  });
+
+  assert.deepEqual(commands, []);
+});
+
 test("does not register notifications in subagent processes", () => {
   let registrations = 0;
   const pi = {

@@ -23,6 +23,11 @@ function responseText(message: unknown) {
     .split(/\r?\n/, 1)[0];
 }
 
+// Detect subagent completion prompts.
+function isSubagentCompletion(prompt: string) {
+  return /^(?:Workflow child completed|Background task completed):/.test(prompt.trim());
+}
+
 // Notify when an agent finishes.
 function notifyAgentSettled(
   runCommand: (file: string, args: string[]) => unknown,
@@ -66,9 +71,14 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   const runCommand = dependencies.execFile ?? execFile;
   let latestResponse = "";
   let sessionId = "";
+  let suppressSubagentNotification = false;
 
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId().slice(0, 7);
+  });
+
+  pi.on("before_agent_start", (event) => {
+    suppressSubagentNotification = isSubagentCompletion(event.prompt);
   });
 
   pi.on("agent_start", () => {
@@ -83,7 +93,10 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   pi.on("agent_settled", (_event, ctx) => {
     const sessionName = pi.getSessionName()?.trim();
     const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
-    notifyAgentSettled(runCommand, sessionTitle, latestResponse);
+    if (!suppressSubagentNotification) {
+      notifyAgentSettled(runCommand, sessionTitle, latestResponse);
+    }
+    suppressSubagentNotification = false;
   });
 
   pi.events.on("rpiv:ask-user:prompt", (raw) => {
