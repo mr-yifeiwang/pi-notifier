@@ -6,6 +6,7 @@ This repository contains a Pi extension that sends macOS notifications. The exte
 
 - [Pi Coding Agent](https://pi.dev/), an open-source agent harness
 - [Terminal Notifier](https://github.com/julienXX/terminal-notifier)
+- (_dev only_) [Node](https://nodejs.org/)
 - (_optional_) [@juicesharp/rpiv-ask-user-question](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question)
 
 ## Installation

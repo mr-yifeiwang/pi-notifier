@@ -1,0 +1,20 @@
+{
+  "name": "pi-terminal-notifier",
+  "version": "1.0.0",
+  "description": "macOS notifier for Pi Coding Agent",
+  "license": "MIT",
+  "keywords": [
+    "macos",
+    "notifier",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "terminal-notifier"
+  ],
+  "pi": {
+    "extensions": [
+      "./pi-terminal-notifier.ts"
+    ]
+  },
+  "peerDependencies": {}
+}
