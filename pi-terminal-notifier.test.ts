@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import notifier from "./pi-terminal-notifier.ts";
 
-test("sends a completion notification when the agent settles", () => {
+test("uses the session name as the subtitle when available", () => {
   const handlers = new Map<string, () => void>();
   const commands: Array<[string, string[]]> = [];
   const pi = {
@@ -14,7 +14,9 @@ test("sends a completion notification when the agent settles", () => {
     execFile: (file, args) => commands.push([file, args]),
     isSubagent: false,
   });
-  handlers.get("agent_settled")?.();
+  handlers.get("agent_settled")?.(undefined, {
+    sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+  });
 
   assert.deepEqual(commands, [[
     "terminal-notifier",
@@ -29,6 +31,44 @@ test("sends a completion notification when the agent settles", () => {
       "Submarine",
     ],
   ]]);
+});
+
+test("uses the first seven ID characters without a display name", () => {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const commands: Array<[string, string[]]> = [];
+  const pi = {
+    getSessionName: () => undefined,
+    on: (event: string, handler: (...args: unknown[]) => void) => handlers.set(event, handler),
+  };
+
+  notifier(pi as never, {
+    execFile: (file, args) => commands.push([file, args]),
+    isSubagent: false,
+  });
+  handlers.get("agent_settled")?.(undefined, {
+    sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+  });
+
+  assert.equal(commands[0]?.[1][3], "abcdef0");
+});
+
+test("uses the ID when the display name is empty", () => {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const commands: Array<[string, string[]]> = [];
+  const pi = {
+    getSessionName: () => "   ",
+    on: (event: string, handler: (...args: unknown[]) => void) => handlers.set(event, handler),
+  };
+
+  notifier(pi as never, {
+    execFile: (file, args) => commands.push([file, args]),
+    isSubagent: false,
+  });
+  handlers.get("agent_settled")?.(undefined, {
+    sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+  });
+
+  assert.equal(commands[0]?.[1][3], "abcdef0");
 });
 
 test("does not register notifications in subagent processes", () => {

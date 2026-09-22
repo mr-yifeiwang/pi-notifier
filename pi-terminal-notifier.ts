@@ -28,7 +28,9 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
 
   const runCommand = dependencies.execFile ?? execFile;
 
-  pi.on("agent_settled", () => {
-    notifyAgentSettled(runCommand, pi.getSessionName() ?? "");
+  pi.on("agent_settled", (_event, ctx) => {
+    const sessionName = pi.getSessionName()?.trim();
+    const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
+    notifyAgentSettled(runCommand, sessionTitle);
   });
 }
