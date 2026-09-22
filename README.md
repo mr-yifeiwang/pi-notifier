@@ -14,14 +14,11 @@ This repository contains a Pi extension that sends macOS notifications. The exte
 
 ## Installation
 
-1. Copy `pi-terminal-notifier.ts` to Pi's config folder:
-
+1. Install the extension from GitHub:
    ```sh
-   mkdir -p ~/.pi/agent/extensions
-   cp pi-terminal-notifier.ts ~/.pi/agent/extensions
+   pi install git:github.com/mr-yifeiwang/pi-terminal-notifier
    ```
-
-1. Restart pi.
+1. Restart Pi.
 
 ## Supported Extensions
 
