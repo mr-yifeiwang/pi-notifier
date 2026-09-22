@@ -4,24 +4,29 @@
 
 ---
 
-This repository contains a Pi extension that sends macOS notifications. The extension uses [terminal-notifier](#dependencies) to send a notification when the main agent finishes a run. The notification shows the session name or a short session ID, and the first line of Pi's response.
+This repository contains a Pi extension that sends macOS notifications.
 
-## Dependencies
+- Notify when the main agent becomes idle
+- Notify when the main agent needs attention through a [supported extension](#supported-extensions)
+- Suppress noisy notifications from subagents
+
+Notifications include the session name or a short session ID, along with relevant context such as the first line of Pi's response.
+
+## Requirements
 
 - [Pi Coding Agent](https://pi.dev/), an open-source agent harness
-- [Terminal Notifier](https://github.com/julienXX/terminal-notifier)
-- (_dev only_) [Node](https://nodejs.org/)
+- [Terminal Notifier](https://github.com/julienXX/terminal-notifier#installation), installed via Homebrew
 
 ## Installation
 
-1. Install the extension from GitHub:
-   ```sh
-   pi install git:github.com/mr-yifeiwang/pi-notifier
+1. Type the following in Pi:
+   ```txt
+   Install https://github.com/mr-yifeiwang/pi-notifier
    ```
-1. Restart Pi.
+1. Reload Pi.
 
 ## Supported Extensions
 
 Pi Notifier includes dedicated support for the following extensions:
 
-- [@juicesharp/rpiv-ask-user-question@2.9.0](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question): Notify when asking a question
+- [@juicesharp/rpiv-ask-user-question](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question): Notify when the agent is asking a question
