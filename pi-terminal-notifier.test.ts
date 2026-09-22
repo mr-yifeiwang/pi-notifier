@@ -138,6 +138,38 @@ test("suppresses workflow-child completion notifications", () => {
   assert.deepEqual(commands, []);
 });
 
+test("warns once when terminal-notifier cannot be launched", () => {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const notifications: Array<[string, string]> = [];
+  const pi = {
+    getSessionName: () => undefined,
+    on: (event: string, handler: (...args: unknown[]) => void) => handlers.set(event, handler),
+    events: { on: () => {} },
+  };
+
+  notifier(pi as never, {
+    execFile: (_file, _args, callback) => {
+      assert.ok(callback, "a launch-error callback must be provided");
+      callback(Object.assign(new Error("terminal-notifier is missing"), { code: "ENOENT" }));
+    },
+    isSubagent: false,
+  });
+
+  const context = {
+    sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+    ui: { notify: (message: string, level: string) => notifications.push([message, level]) },
+  };
+
+  assert.doesNotThrow(() => {
+    handlers.get("agent_settled")?.(undefined, context);
+    handlers.get("agent_settled")?.(undefined, context);
+  });
+  assert.deepEqual(notifications, [[
+    "terminal-notifier is unavailable. Install it with: brew install terminal-notifier",
+    "warning",
+  ]]);
+});
+
 test("does not register notifications in subagent processes", () => {
   let registrations = 0;
   const pi = {

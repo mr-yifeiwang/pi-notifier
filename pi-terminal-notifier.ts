@@ -1,10 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 
+type LaunchError = Error & { code?: string };
+
 type Dependencies = {
-  execFile?: (file: string, args: string[]) => unknown;
+  execFile?: (file: string, args: string[], callback: (error: LaunchError | null) => void) => unknown;
   isSubagent?: boolean;
 };
+
+type RunCommand = NonNullable<Dependencies["execFile"]>;
 
 // Extract the first line of an assistant response.
 function responseText(message: unknown) {
@@ -28,11 +32,25 @@ function isSubagentCompletion(prompt: string) {
   return /^(?:Workflow child completed|Background task completed):/.test(prompt.trim());
 }
 
+// Identify a missing terminal-notifier executable.
+function isTerminalNotifierUnavailable(error: LaunchError | null) {
+  return error?.code === "ENOENT";
+}
+
+// Notify users when terminal-notifier is unavailable.
+function notifyTerminalNotifierUnavailable(notify: (message: string, level: "warning") => void) {
+  notify(
+    "terminal-notifier is unavailable. Install it with: brew install terminal-notifier",
+    "warning",
+  );
+}
+
 // Notify when an agent finishes.
 function notifyAgentSettled(
-  runCommand: (file: string, args: string[]) => unknown,
+  runCommand: RunCommand,
   sessionTitle: string,
   response: string,
+  onUnavailable: () => void,
 ) {
   runCommand("terminal-notifier", [
     "-title",
@@ -43,14 +61,17 @@ function notifyAgentSettled(
     response || "Session finished",
     "-sound",
     "Submarine",
-  ]);
+  ], (error) => {
+    if (isTerminalNotifierUnavailable(error)) onUnavailable();
+  });
 }
 
 // Notify when a question requires an answer.
 function notifyQuestionAsked(
-  runCommand: (file: string, args: string[]) => unknown,
+  runCommand: RunCommand,
   sessionTitle: string,
   question: string,
+  onUnavailable: () => void,
 ) {
   runCommand("terminal-notifier", [
     "-title",
@@ -61,7 +82,9 @@ function notifyQuestionAsked(
     question ? `Question asked: ${question}` : "Question asked",
     "-sound",
     "Submarine",
-  ]);
+  ], (error) => {
+    if (isTerminalNotifierUnavailable(error)) onUnavailable();
+  });
 }
 
 // Register completion notifications with Pi.
@@ -72,6 +95,8 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   let latestResponse = "";
   let sessionId = "";
   let suppressSubagentNotification = false;
+  // Limit missing-dependency reminders to one per session.
+  let hasWarnedTerminalNotifierUnavailable = false;
 
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId().slice(0, 7);
@@ -94,7 +119,11 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     const sessionName = pi.getSessionName()?.trim();
     const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
     if (!suppressSubagentNotification) {
-      notifyAgentSettled(runCommand, sessionTitle, latestResponse);
+      notifyAgentSettled(runCommand, sessionTitle, latestResponse, () => {
+        if (hasWarnedTerminalNotifierUnavailable) return;
+        notifyTerminalNotifierUnavailable(ctx.ui.notify.bind(ctx.ui));
+        hasWarnedTerminalNotifierUnavailable = true;
+      });
     }
     suppressSubagentNotification = false;
   });
@@ -103,6 +132,6 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     const event = raw as { questions?: Array<{ question?: unknown }> };
     const question = event.questions?.[0]?.question;
     const sessionTitle = pi.getSessionName()?.trim() || sessionId;
-    notifyQuestionAsked(runCommand, sessionTitle, typeof question === "string" ? question : "");
+    notifyQuestionAsked(runCommand, sessionTitle, typeof question === "string" ? question : "", () => {});
   });
 }
