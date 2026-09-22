@@ -1,6 +1,6 @@
 # Pi Terminal Notifier
 
-This repository contains a Pi extension that sends macOS notifications.
+This repository contains a Pi extension that sends macOS notifications. The extension uses [terminal-notifier](#dependencies) to send a notification when the main agent finishes a run. The notification shows the session name or a short session ID, and the first line of Pi's response. If `@juicesharp/rpiv-ask-user-question` is installed, it also notifies the user when Pi asks a question.
 
 ## Dependencies
 
