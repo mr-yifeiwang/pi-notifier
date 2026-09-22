@@ -1,5 +1,5 @@
 {
-  "name": "@mr-yifeiwang/pi-terminal-notifier",
+  "name": "@mr-yifeiwang/pi-notifier",
   "version": "1.0.0",
   "description": "macOS notifier for Pi Coding Agent",
   "license": "MIT",
