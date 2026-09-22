@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import notifier from "./pi-terminal-notifier.ts";
+import notifier from "./main.ts";
 
 test("uses the session name as the subtitle when available", () => {
   const handlers = new Map<string, (...args: unknown[]) => void>();

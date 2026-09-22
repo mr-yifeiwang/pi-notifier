@@ -4,7 +4,7 @@
   "description": "macOS notifier for Pi Coding Agent",
   "license": "MIT",
   "scripts": {
-    "test": "node --test pi-terminal-notifier.test.ts"
+    "test": "node --test main.test.ts"
   },
   "keywords": [
     "macos",
@@ -16,7 +16,7 @@
   ],
   "pi": {
     "extensions": [
-      "./pi-terminal-notifier.ts"
+      "./main.ts"
     ]
   },
   "peerDependencies": {}
