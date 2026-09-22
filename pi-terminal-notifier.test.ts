@@ -3,16 +3,23 @@ import test from "node:test";
 import notifier from "./pi-terminal-notifier.ts";
 
 test("uses the session name as the subtitle when available", () => {
-  const handlers = new Map<string, () => void>();
+  const handlers = new Map<string, (...args: unknown[]) => void>();
   const commands: Array<[string, string[]]> = [];
   const pi = {
     getSessionName: () => "Notifier tests",
-    on: (event: string, handler: () => void) => handlers.set(event, handler),
+    on: (event: string, handler: (...args: unknown[]) => void) => handlers.set(event, handler),
   };
 
   notifier(pi as never, {
     execFile: (file, args) => commands.push([file, args]),
     isSubagent: false,
+  });
+  handlers.get("agent_start")?.();
+  handlers.get("message_end")?.({
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "The task is complete.\nMore detail." }],
+    },
   });
   handlers.get("agent_settled")?.(undefined, {
     sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
@@ -26,7 +33,7 @@ test("uses the session name as the subtitle when available", () => {
       "-subtitle",
       "Notifier tests",
       "-message",
-      "Session finished",
+      "The task is complete.",
       "-sound",
       "Submarine",
     ],
