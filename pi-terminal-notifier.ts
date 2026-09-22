@@ -18,6 +18,8 @@ function notifyAgentSettled(
     sessionTitle,
     "-message",
     "Session finished",
+    "-sound",
+    "Submarine",
   ]);
 }
 

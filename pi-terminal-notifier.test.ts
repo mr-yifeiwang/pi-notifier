@@ -18,7 +18,16 @@ test("sends a completion notification when the agent settles", () => {
 
   assert.deepEqual(commands, [[
     "terminal-notifier",
-    ["-title", "Pi", "-subtitle", "Notifier tests", "-message", "Session finished"],
+    [
+      "-title",
+      "Pi",
+      "-subtitle",
+      "Notifier tests",
+      "-message",
+      "Session finished",
+      "-sound",
+      "Submarine",
+    ],
   ]]);
 });
 
