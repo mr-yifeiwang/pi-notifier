@@ -98,8 +98,19 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   // Limit missing-dependency reminders to one per session.
   let hasWarnedTerminalNotifierUnavailable = false;
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId().slice(0, 7);
+    hasWarnedTerminalNotifierUnavailable = false;
+    // Show a warning message if terminal-notifier is unavailable.
+    await new Promise<void>((resolve) => {
+      runCommand("terminal-notifier", ["-version"], (error) => {
+        if (isTerminalNotifierUnavailable(error)) {
+          notifyTerminalNotifierUnavailable(ctx.ui.notify.bind(ctx.ui));
+          hasWarnedTerminalNotifierUnavailable = true;
+        }
+        resolve();
+      });
+    });
   });
 
   pi.on("before_agent_start", (event) => {

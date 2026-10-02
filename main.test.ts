@@ -170,6 +170,66 @@ test("warns once when terminal-notifier cannot be launched", () => {
   ]]);
 });
 
+for (const missing of [false, true]) {
+  test(`checks terminal-notifier at startup when ${missing ? "missing" : "available"}`, async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const commands: Array<[string, string[]]> = [];
+    const notifications: Array<[string, string]> = [];
+    const pi = {
+      getSessionName: () => undefined,
+      on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
+      events: { on: () => {} },
+    };
+    notifier(pi as never, {
+      execFile: (file, args, callback) => {
+        commands.push([file, args]);
+        queueMicrotask(() => callback(missing
+          ? Object.assign(new Error("terminal-notifier is missing"), { code: "ENOENT" })
+          : null));
+      },
+      isSubagent: false,
+    });
+    // Loading the factory must not launch a process.
+    assert.deepEqual(commands, []);
+    await handlers.get("session_start")?.(undefined, {
+      sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+      ui: { notify: (message: string, level: string) => notifications.push([message, level]) },
+    });
+    assert.deepEqual(commands, [["terminal-notifier", ["-version"]]]);
+    assert.deepEqual(notifications, missing ? [[
+      "terminal-notifier is unavailable. Install it with: brew install terminal-notifier",
+      "warning",
+    ]] : []);
+  });
+}
+
+test("does not repeat the startup warning at completion", async () => {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const notifications: Array<[string, string]> = [];
+  const pi = {
+    getSessionName: () => undefined,
+    on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
+    events: { on: () => {} },
+  };
+  notifier(pi as never, {
+    execFile: (_file, _args, callback) => {
+      callback(Object.assign(new Error("terminal-notifier is missing"), { code: "ENOENT" }));
+    },
+    isSubagent: false,
+  });
+  const context = {
+    sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
+    ui: { notify: (message: string, level: string) => notifications.push([message, level]) },
+  };
+  await handlers.get("session_start")?.(undefined, context);
+  assert.equal(notifications.length, 1, "startup must show the warning");
+  handlers.get("agent_settled")?.(undefined, context);
+  handlers.get("agent_settled")?.(undefined, context);
+  assert.equal(notifications.length, 1, "completion must not repeat it");
+  await handlers.get("session_start")?.(undefined, context);
+  assert.equal(notifications.length, 2, "a new session must check and warn again");
+});
+
 test("does not register notifications in subagent processes", () => {
   let registrations = 0;
   const pi = {
