@@ -10,26 +10,31 @@ type Dependencies = {
 
 type RunCommand = NonNullable<Dependencies["execFile"]>;
 
-// Extract the first line of an assistant response.
-function responseText(message: unknown) {
-  const assistant = message as { role?: unknown; content?: unknown };
-  if (assistant.role !== "assistant" || !Array.isArray(assistant.content)) return "";
+// Extract text from assistant, user, or custom messages.
+function messageText(message: unknown) {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
 
-  return assistant.content
+  return content
     .filter((part): part is { type: "text"; text: string } =>
       typeof part === "object" && part !== null &&
       (part as { type?: unknown }).type === "text" &&
       typeof (part as { text?: unknown }).text === "string",
     )
     .map((part) => part.text)
-    .join("")
-    .trim()
-    .split(/\r?\n/, 1)[0];
+    .join("");
+}
+
+// Extract the first line of an assistant response.
+function responseText(message: unknown) {
+  if ((message as { role?: unknown } | null)?.role !== "assistant") return "";
+  return messageText(message).trim().split(/\r?\n/, 1)[0];
 }
 
 // Detect subagent completion prompts.
 function isSubagentCompletion(prompt: string) {
-  return /^(?:Workflow child completed|Background task completed):/.test(prompt.trim());
+  return /^(?:(?:Workflow child|Background task|Detached foreground task) completed:|Background tasks completed \(\d+\):)/.test(prompt.trim());
 }
 
 // Identify a missing terminal-notifier executable.
@@ -94,12 +99,26 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   const runCommand = dependencies.execFile ?? execFile;
   let latestResponse = "";
   let sessionId = "";
+  let currentSessionId = "";
+  const activeSubagents = new Set<string>();
+  let completionPrompt = false;
+  let userPrompt = false;
+  let agentRunning = false;
+  let hasUserInput = false;
+  let performedTools = false;
+  let needsAttention = false;
   let suppressSubagentNotification = false;
   // Limit missing-dependency reminders to one per session.
   let hasWarnedTerminalNotifierUnavailable = false;
 
   pi.on("session_start", async (_event, ctx) => {
-    sessionId = ctx.sessionManager.getSessionId().slice(0, 7);
+    currentSessionId = ctx.sessionManager.getSessionId();
+    sessionId = currentSessionId.slice(0, 7);
+    activeSubagents.clear();
+    completionPrompt = false;
+    userPrompt = false;
+    agentRunning = false;
+    suppressSubagentNotification = false;
     hasWarnedTerminalNotifierUnavailable = false;
     // Show a warning message if terminal-notifier is unavailable.
     await new Promise<void>((resolve) => {
@@ -113,23 +132,66 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     });
   });
 
+  pi.events.on("subagent:async-started", (raw) => {
+    const event = raw as { sessionId?: unknown; id?: unknown } | null;
+    if (!currentSessionId || event?.sessionId !== currentSessionId) return;
+    if (typeof event.id === "string" && event.id) activeSubagents.add(event.id);
+  });
+
+  pi.events.on("subagent:async-complete", (raw) => {
+    const event = raw as { sessionId?: unknown; runId?: unknown } | null;
+    if (!currentSessionId || event?.sessionId !== currentSessionId) return;
+    if (typeof event.runId === "string") activeSubagents.delete(event.runId);
+  });
+
   pi.on("before_agent_start", (event) => {
-    suppressSubagentNotification = isSubagentCompletion(event.prompt);
+    completionPrompt = isSubagentCompletion(event.prompt);
+    userPrompt = !completionPrompt;
   });
 
   pi.on("agent_start", () => {
     latestResponse = "";
+    agentRunning = true;
+    suppressSubagentNotification = completionPrompt;
+    hasUserInput = userPrompt;
+    performedTools = false;
+    needsAttention = false;
+    completionPrompt = false;
+    userPrompt = false;
+  });
+
+  pi.on("tool_execution_start", () => {
+    if (agentRunning) performedTools = true;
   });
 
   pi.on("message_end", (event) => {
-    const response = responseText(event.message);
+    const message = event.message;
+    if (agentRunning) {
+      if (message.role === "user" && !isSubagentCompletion(messageText(message))) {
+        hasUserInput = true;
+      }
+      if (message.role === "custom" && (
+        message.customType === "subagent-notify" ||
+        message.customType === "subagent-incremental-child-notify"
+      )) {
+        if (isSubagentCompletion(messageText(message))) suppressSubagentNotification = true;
+        else needsAttention = true;
+      }
+      if (message.role === "assistant" && (
+        message.stopReason === "error" || message.stopReason === "aborted"
+      )) needsAttention = true;
+    }
+    const response = responseText(message);
     if (response) latestResponse = response;
   });
 
   pi.on("agent_settled", (_event, ctx) => {
     const sessionName = pi.getSessionName()?.trim();
     const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
-    if (!suppressSubagentNotification) {
+    // FIXME: Suppress the last subagent-invoked notification.
+    const suppress = suppressSubagentNotification && activeSubagents.size > 0 &&
+      !hasUserInput && !performedTools && !needsAttention;
+    if (!suppress) {
       notifyAgentSettled(runCommand, sessionTitle, latestResponse, () => {
         if (hasWarnedTerminalNotifierUnavailable) return;
         notifyTerminalNotifierUnavailable(ctx.ui.notify.bind(ctx.ui));
@@ -137,6 +199,7 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
       });
     }
     suppressSubagentNotification = false;
+    agentRunning = false;
   });
 
   pi.events.on("rpiv:ask-user:prompt", (raw) => {

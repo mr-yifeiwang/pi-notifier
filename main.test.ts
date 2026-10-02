@@ -116,7 +116,7 @@ test("notifies when ask-user-question presents a question", () => {
   ]]);
 });
 
-test("suppresses workflow-child completion notifications", () => {
+test("notifies for completion prompts when no subagents are tracked", () => {
   const handlers = new Map<string, (...args: unknown[]) => void>();
   const commands: Array<[string, string[]]> = [];
   const pi = {
@@ -135,7 +135,7 @@ test("suppresses workflow-child completion notifications", () => {
     sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
   });
 
-  assert.deepEqual(commands, []);
+  assert.equal(commands.length, 1);
 });
 
 test("warns once when terminal-notifier cannot be launched", () => {
@@ -228,6 +228,195 @@ test("does not repeat the startup warning at completion", async () => {
   assert.equal(notifications.length, 1, "completion must not repeat it");
   await handlers.get("session_start")?.(undefined, context);
   assert.equal(notifications.length, 2, "a new session must check and warn again");
+});
+
+function subagentHarness() {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const eventHandlers = new Map<string, (...args: unknown[]) => void>();
+  const commands: string[][] = [];
+  const context = {
+    sessionManager: { getSessionId: () => "parent-session" },
+    ui: { notify: () => {} },
+  };
+  const pi = {
+    getSessionName: () => "Subagent tests",
+    on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
+    events: {
+      on: (event: string, handler: (...args: unknown[]) => void) => eventHandlers.set(event, handler),
+    },
+  };
+  notifier(pi as never, {
+    execFile: (_file, args, callback) => {
+      if (args.includes("-message")) commands.push(args);
+      callback(null);
+    },
+    isSubagent: false,
+  });
+  const startSession = () => handlers.get("session_start")?.(undefined, context);
+  startSession();
+  const startChild = (id: string, sessionId = "parent-session") =>
+    eventHandlers.get("subagent:async-started")?.({ id, sessionId });
+  const completeChild = (runId: string, sessionId = "parent-session") =>
+    eventHandlers.get("subagent:async-complete")?.({ runId, sessionId });
+  const startRun = (prompt?: string) => {
+    if (prompt !== undefined) handlers.get("before_agent_start")?.({ prompt });
+    handlers.get("agent_start")?.();
+  };
+  const message = (message: unknown) => handlers.get("message_end")?.({ message });
+  const notice = (text = "Background task completed: **worker**", customType = "subagent-notify") =>
+    message({ role: "custom", customType, content: text });
+  const reply = (text: string, stopReason = "stop") =>
+    message({ role: "assistant", content: [{ type: "text", text }], stopReason });
+  const settle = () => handlers.get("agent_settled")?.(undefined, context);
+  return { handlers, eventHandlers, commands, startSession, startChild, completeChild, startRun, message, notice, reply, settle };
+}
+
+test("suppresses intermediate custom-message wakes but allows the last completion", () => {
+  const h = subagentHarness();
+  h.startChild("a");
+  h.startChild("b");
+  h.completeChild("a");
+  h.startRun(); // Custom-message wakes bypass before_agent_start.
+  h.notice();
+  h.reply("Worker A finished. Waiting for worker B.");
+  h.settle();
+  assert.equal(h.commands.length, 0);
+  h.completeChild("b");
+  h.startRun();
+  h.notice();
+  h.reply("All results have been aggregated.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[5], "All results have been aggregated.");
+});
+
+for (const [text, customType] of [
+  ["Workflow child completed: **worker**", "subagent-incremental-child-notify"],
+  ["Detached foreground task completed: **worker**", "subagent-notify"],
+  ["Background tasks completed (2): **a**, **b**", "subagent-notify"],
+]) {
+  test(`suppresses intermediate notices: ${text}`, () => {
+    const h = subagentHarness();
+    h.startChild("remaining");
+    h.startRun();
+    h.notice(text, customType);
+    h.reply("A child finished.");
+    h.settle();
+    assert.equal(h.commands.length, 0);
+  });
+}
+
+test("supports completion prompts without suppressing the last completion", () => {
+  const h = subagentHarness();
+  h.startChild("remaining");
+  h.startRun("Workflow child completed: worker");
+  h.reply("Waiting for the remaining child.");
+  h.settle();
+  assert.equal(h.commands.length, 0);
+  h.completeChild("remaining");
+  h.startRun("Workflow child completed: worker");
+  h.reply("The task is complete.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+for (const userFirst of [false, true]) {
+  test(`preserves user-triggered notifications with a completion notice, userFirst=${userFirst}`, () => {
+    const h = subagentHarness();
+    h.startChild("remaining");
+    h.startRun("Please review these results.");
+    const userMessage = () => h.message({ role: "user", content: [{ type: "text", text: "Please review these results." }] });
+    if (userFirst) userMessage();
+    h.notice();
+    if (!userFirst) userMessage();
+    h.reply("Your review is complete.");
+    h.settle();
+    assert.equal(h.commands.length, 1);
+  });
+}
+
+test("preserves notifications when the main agent uses tools", () => {
+  const h = subagentHarness();
+  h.startChild("remaining");
+  h.startRun();
+  h.notice();
+  h.handlers.get("tool_execution_start")?.({ toolName: "write" });
+  h.reply("Updated the combined report.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+test("preserves question alerts during an intermediate completion run", () => {
+  const h = subagentHarness();
+  h.startChild("remaining");
+  h.startRun();
+  h.notice();
+  h.eventHandlers.get("rpiv:ask-user:prompt")?.({ questions: [{ question: "Continue?" }] });
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[5], "Question asked: Continue?");
+});
+
+for (const text of ["Background task failed: **worker**", "Workflow child paused (needs attention): **worker**"]) {
+  test(`preserves attention notifications: ${text}`, () => {
+    const h = subagentHarness();
+    h.startChild("remaining");
+    h.startRun();
+    h.notice();
+    h.notice(text);
+    h.reply("A child needs attention.");
+    h.settle();
+    assert.equal(h.commands.length, 1);
+  });
+}
+
+for (const stopReason of ["error", "aborted"]) {
+  test(`preserves main-agent notifications after ${stopReason}`, () => {
+    const h = subagentHarness();
+    h.startChild("remaining");
+    h.startRun();
+    h.notice();
+    h.reply("The run did not finish normally.", stopReason);
+    h.settle();
+    assert.equal(h.commands.length, 1);
+  });
+}
+
+test("ignores subagent lifecycle events from other sessions", () => {
+  const h = subagentHarness();
+  h.startChild("other", "another-session");
+  h.startRun();
+  h.notice();
+  h.reply("All done.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+  h.startChild("local");
+  h.completeChild("local", "another-session");
+  h.startRun();
+  h.notice();
+  h.reply("Still waiting for the local child.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+test("clears pending subagents when the session changes", () => {
+  const h = subagentHarness();
+  h.startChild("remaining");
+  h.startSession();
+  h.startRun();
+  h.notice();
+  h.reply("No pending children in this session.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+test("does not let an idle completion notice suppress a later normal run", () => {
+  const h = subagentHarness();
+  h.startChild("remaining");
+  h.notice();
+  h.startRun();
+  h.reply("Normal work is done.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
 });
 
 test("does not register notifications in subagent processes", () => {

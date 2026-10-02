@@ -1,6 +1,6 @@
 {
   "name": "@mr-yifeiwang/pi-notifier",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "macOS notifier for Pi Coding Agent",
   "license": "MIT",
   "scripts": {
