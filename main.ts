@@ -45,7 +45,7 @@ function isTerminalNotifierUnavailable(error: LaunchError | null) {
 // Notify users when terminal-notifier is unavailable.
 function notifyTerminalNotifierUnavailable(notify: (message: string, level: "warning") => void) {
   notify(
-    "terminal-notifier is unavailable. Install it with: brew install terminal-notifier",
+    "terminal-notifier is unavailable. The pi-notifier extension needs it to send macOS notifications. Install it with: brew install terminal-notifier",
     "warning",
   );
 }

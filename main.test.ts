@@ -165,7 +165,7 @@ test("warns once when terminal-notifier cannot be launched", () => {
     handlers.get("agent_settled")?.(undefined, context);
   });
   assert.deepEqual(notifications, [[
-    "terminal-notifier is unavailable. Install it with: brew install terminal-notifier",
+    "terminal-notifier is unavailable. The pi-notifier extension needs it to send macOS notifications. Install it with: brew install terminal-notifier",
     "warning",
   ]]);
 });
@@ -197,7 +197,7 @@ for (const missing of [false, true]) {
     });
     assert.deepEqual(commands, [["terminal-notifier", ["-version"]]]);
     assert.deepEqual(notifications, missing ? [[
-      "terminal-notifier is unavailable. Install it with: brew install terminal-notifier",
+      "terminal-notifier is unavailable. The pi-notifier extension needs it to send macOS notifications. Install it with: brew install terminal-notifier",
       "warning",
     ]] : []);
   });
