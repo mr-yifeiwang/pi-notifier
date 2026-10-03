@@ -32,8 +32,8 @@ function responseText(message: unknown) {
   return messageText(message).trim().split(/\r?\n/, 1)[0];
 }
 
-// Detect subagent completion prompts.
-function isSubagentCompletion(prompt: string) {
+// Detect asynchronous run completion prompts.
+function isAsyncCompletionPrompt(prompt: string) {
   return /^(?:(?:Workflow child|Background task|Detached foreground task) completed:|Background tasks completed \(\d+\):)/.test(prompt.trim());
 }
 
@@ -100,25 +100,25 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   let latestResponse = "";
   let sessionId = "";
   let currentSessionId = "";
-  const activeSubagents = new Set<string>();
+  const activeAsyncRuns = new Set<string>();
   let completionPrompt = false;
   let userPrompt = false;
   let agentRunning = false;
   let hasUserInput = false;
   let performedTools = false;
   let needsAttention = false;
-  let suppressSubagentNotification = false;
+  let suppressCompletionNotification = false;
   // Limit missing-dependency reminders to one per session.
   let hasWarnedTerminalNotifierUnavailable = false;
 
   pi.on("session_start", async (_event, ctx) => {
     currentSessionId = ctx.sessionManager.getSessionId();
     sessionId = currentSessionId.slice(0, 7);
-    activeSubagents.clear();
+    activeAsyncRuns.clear();
     completionPrompt = false;
     userPrompt = false;
     agentRunning = false;
-    suppressSubagentNotification = false;
+    suppressCompletionNotification = false;
     hasWarnedTerminalNotifierUnavailable = false;
     // Show a warning message if terminal-notifier is unavailable.
     await new Promise<void>((resolve) => {
@@ -135,24 +135,24 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   pi.events.on("subagent:async-started", (raw) => {
     const event = raw as { sessionId?: unknown; id?: unknown } | null;
     if (!currentSessionId || event?.sessionId !== currentSessionId) return;
-    if (typeof event.id === "string" && event.id) activeSubagents.add(event.id);
+    if (typeof event.id === "string" && event.id) activeAsyncRuns.add(event.id);
   });
 
   pi.events.on("subagent:async-complete", (raw) => {
     const event = raw as { sessionId?: unknown; runId?: unknown } | null;
     if (!currentSessionId || event?.sessionId !== currentSessionId) return;
-    if (typeof event.runId === "string") activeSubagents.delete(event.runId);
+    if (typeof event.runId === "string") activeAsyncRuns.delete(event.runId);
   });
 
   pi.on("before_agent_start", (event) => {
-    completionPrompt = isSubagentCompletion(event.prompt);
+    completionPrompt = isAsyncCompletionPrompt(event.prompt);
     userPrompt = !completionPrompt;
   });
 
   pi.on("agent_start", () => {
     latestResponse = "";
     agentRunning = true;
-    suppressSubagentNotification = completionPrompt;
+    suppressCompletionNotification = completionPrompt;
     hasUserInput = userPrompt;
     performedTools = false;
     needsAttention = false;
@@ -167,14 +167,14 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   pi.on("message_end", (event) => {
     const message = event.message;
     if (agentRunning) {
-      if (message.role === "user" && !isSubagentCompletion(messageText(message))) {
+      if (message.role === "user" && !isAsyncCompletionPrompt(messageText(message))) {
         hasUserInput = true;
       }
       if (message.role === "custom" && (
         message.customType === "subagent-notify" ||
         message.customType === "subagent-incremental-child-notify"
       )) {
-        if (isSubagentCompletion(messageText(message))) suppressSubagentNotification = true;
+        if (isAsyncCompletionPrompt(messageText(message))) suppressCompletionNotification = true;
         else needsAttention = true;
       }
       if (message.role === "assistant" && (
@@ -188,8 +188,8 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   pi.on("agent_settled", (_event, ctx) => {
     const sessionName = pi.getSessionName()?.trim();
     const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
-    // FIXME: Suppress the last subagent-invoked notification.
-    const suppress = suppressSubagentNotification && activeSubagents.size > 0 &&
+    // FIXME: Suppress the last workflow-invoked notification.
+    const suppress = suppressCompletionNotification && activeAsyncRuns.size > 0 &&
       !hasUserInput && !performedTools && !needsAttention;
     if (!suppress) {
       notifyAgentSettled(runCommand, sessionTitle, latestResponse, () => {
@@ -198,7 +198,7 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
         hasWarnedTerminalNotifierUnavailable = true;
       });
     }
-    suppressSubagentNotification = false;
+    suppressCompletionNotification = false;
     agentRunning = false;
   });
 

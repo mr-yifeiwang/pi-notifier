@@ -116,7 +116,7 @@ test("notifies when ask-user-question presents a question", () => {
   ]]);
 });
 
-test("notifies for completion prompts when no subagents are tracked", () => {
+test("notifies for completion prompts when no asynchronous runs are tracked", () => {
   const handlers = new Map<string, (...args: unknown[]) => void>();
   const commands: Array<[string, string[]]> = [];
   const pi = {
@@ -381,7 +381,7 @@ for (const stopReason of ["error", "aborted"]) {
   });
 }
 
-test("ignores subagent lifecycle events from other sessions", () => {
+test("ignores asynchronous run lifecycle events from other sessions", () => {
   const h = subagentHarness();
   h.startChild("other", "another-session");
   h.startRun();
@@ -398,7 +398,7 @@ test("ignores subagent lifecycle events from other sessions", () => {
   assert.equal(h.commands.length, 1);
 });
 
-test("clears pending subagents when the session changes", () => {
+test("clears pending asynchronous runs when the session changes", () => {
   const h = subagentHarness();
   h.startChild("remaining");
   h.startSession();
