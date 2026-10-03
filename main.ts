@@ -99,25 +99,31 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   const runCommand = dependencies.execFile ?? execFile;
   let latestResponse = "";
   let sessionId = "";
-  let currentSessionId = "";
+  const currentSessionIdentities = new Set<string>();
   const activeAsyncRuns = new Set<string>();
   let completionPrompt = false;
   let userPrompt = false;
   let agentRunning = false;
   let hasUserInput = false;
   let performedTools = false;
+  let startedAsyncRun = false;
   let needsAttention = false;
   let suppressCompletionNotification = false;
   // Limit missing-dependency reminders to one per session.
   let hasWarnedTerminalNotifierUnavailable = false;
 
   pi.on("session_start", async (_event, ctx) => {
-    currentSessionId = ctx.sessionManager.getSessionId();
+    const currentSessionId = ctx.sessionManager.getSessionId();
+    const sessionFile = ctx.sessionManager.getSessionFile?.();
+    currentSessionIdentities.clear();
+    currentSessionIdentities.add(currentSessionId);
+    if (sessionFile) currentSessionIdentities.add(sessionFile);
     sessionId = currentSessionId.slice(0, 7);
     activeAsyncRuns.clear();
     completionPrompt = false;
     userPrompt = false;
     agentRunning = false;
+    startedAsyncRun = false;
     suppressCompletionNotification = false;
     hasWarnedTerminalNotifierUnavailable = false;
     // Show a warning message if terminal-notifier is unavailable.
@@ -134,13 +140,16 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
 
   pi.events.on("subagent:async-started", (raw) => {
     const event = raw as { sessionId?: unknown; id?: unknown } | null;
-    if (!currentSessionId || event?.sessionId !== currentSessionId) return;
-    if (typeof event.id === "string" && event.id) activeAsyncRuns.add(event.id);
+    if (typeof event?.sessionId !== "string" || !currentSessionIdentities.has(event.sessionId)) return;
+    if (typeof event.id === "string" && event.id) {
+      activeAsyncRuns.add(event.id);
+      if (agentRunning) startedAsyncRun = true;
+    }
   });
 
   pi.events.on("subagent:async-complete", (raw) => {
     const event = raw as { sessionId?: unknown; runId?: unknown } | null;
-    if (!currentSessionId || event?.sessionId !== currentSessionId) return;
+    if (typeof event?.sessionId !== "string" || !currentSessionIdentities.has(event.sessionId)) return;
     if (typeof event.runId === "string") activeAsyncRuns.delete(event.runId);
   });
 
@@ -155,6 +164,7 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     suppressCompletionNotification = completionPrompt;
     hasUserInput = userPrompt;
     performedTools = false;
+    startedAsyncRun = false;
     needsAttention = false;
     completionPrompt = false;
     userPrompt = false;
@@ -188,9 +198,9 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   pi.on("agent_settled", (_event, ctx) => {
     const sessionName = pi.getSessionName()?.trim();
     const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
-    // FIXME: Suppress the last workflow-invoked notification.
+    // Suppress completion wakes that continue asynchronous work.
     const suppress = suppressCompletionNotification && activeAsyncRuns.size > 0 &&
-      !hasUserInput && !performedTools && !needsAttention;
+      !hasUserInput && (!performedTools || startedAsyncRun) && !needsAttention;
     if (!suppress) {
       notifyAgentSettled(runCommand, sessionTitle, latestResponse, () => {
         if (hasWarnedTerminalNotifierUnavailable) return;

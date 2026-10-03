@@ -230,12 +230,15 @@ test("does not repeat the startup warning at completion", async () => {
   assert.equal(notifications.length, 2, "a new session must check and warn again");
 });
 
-function subagentHarness() {
+function subagentHarness(sessionFile?: string) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const eventHandlers = new Map<string, (...args: unknown[]) => void>();
   const commands: string[][] = [];
   const context = {
-    sessionManager: { getSessionId: () => "parent-session" },
+    sessionManager: {
+      getSessionId: () => "parent-session",
+      getSessionFile: () => sessionFile,
+    },
     ui: { notify: () => {} },
   };
   const pi = {
@@ -254,9 +257,9 @@ function subagentHarness() {
   });
   const startSession = () => handlers.get("session_start")?.(undefined, context);
   startSession();
-  const startChild = (id: string, sessionId = "parent-session") =>
+  const startChild = (id: string, sessionId = sessionFile ?? "parent-session") =>
     eventHandlers.get("subagent:async-started")?.({ id, sessionId });
-  const completeChild = (runId: string, sessionId = "parent-session") =>
+  const completeChild = (runId: string, sessionId = sessionFile ?? "parent-session") =>
     eventHandlers.get("subagent:async-complete")?.({ runId, sessionId });
   const startRun = (prompt?: string) => {
     if (prompt !== undefined) handlers.get("before_agent_start")?.({ prompt });
@@ -305,6 +308,142 @@ for (const [text, customType] of [
     assert.equal(h.commands.length, 0);
   });
 }
+
+for (const identity of ["parent-session", "/sessions/parent-session.jsonl"]) {
+  test(`tracks completion events using session identity ${identity}`, () => {
+    const h = subagentHarness("/sessions/parent-session.jsonl");
+    h.startChild("a", identity);
+    h.startChild("b", identity);
+    h.completeChild("a", identity);
+    h.startRun();
+    h.notice();
+    h.reply("Waiting for the remaining run.");
+    h.settle();
+    assert.equal(h.commands.length, 0);
+    h.completeChild("b", identity);
+    h.startRun();
+    h.notice();
+    h.reply("All work is complete.");
+    h.settle();
+    assert.equal(h.commands.length, 1);
+  });
+
+  for (const wake of ["prompt", "custom"]) {
+    test(`suppresses workflow transitions with ${wake} wakes and ${identity}`, () => {
+      const h = subagentHarness("/sessions/parent-session.jsonl");
+      const startCompletion = () => {
+        h.startRun(wake === "prompt" ? "Background task completed: **workflow**" : undefined);
+        if (wake === "custom") h.notice("Background task completed: **workflow**");
+      };
+      h.startRun("Research rankings using two workflows.");
+      h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+      h.startChild("workflow-1", identity);
+      h.reply("Workflow 1 is running.");
+      h.settle();
+      assert.equal(h.commands.length, 1, "initial user-triggered reply must notify");
+
+      h.completeChild("workflow-1", identity);
+      startCompletion();
+      h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+      h.startChild("workflow-2", identity);
+      h.reply("Workflow 2 is running.");
+      h.settle();
+      assert.equal(h.commands.length, 1, "workflow transition must not notify");
+
+      h.completeChild("workflow-2", identity);
+      startCompletion();
+      h.handlers.get("tool_execution_start")?.({ toolName: "read" });
+      h.reply("The checked comparison is complete.");
+      h.settle();
+      assert.equal(h.commands.length, 2, "final results must notify");
+      assert.equal(h.commands[1]?.[5], "The checked comparison is complete.");
+    });
+  }
+}
+
+test("ignores another session's file-path lifecycle events", () => {
+  const h = subagentHarness("/sessions/parent-session.jsonl");
+  h.startChild("other", "/sessions/other-session.jsonl");
+  h.startRun();
+  h.notice();
+  h.reply("All done.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+
+  h.startChild("local");
+  h.completeChild("local", "/sessions/other-session.jsonl");
+  h.startRun();
+  h.notice();
+  h.reply("Still waiting for local work.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+test("resets asynchronous start tracking before later tool work", () => {
+  const h = subagentHarness("/sessions/parent-session.jsonl");
+  h.startRun();
+  h.notice();
+  h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+  h.startChild("next-workflow");
+  h.reply("The next workflow is running.");
+  h.settle();
+  assert.equal(h.commands.length, 0);
+
+  h.startRun();
+  h.notice();
+  h.handlers.get("tool_execution_start")?.({ toolName: "write" });
+  h.reply("Updated the combined report.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+for (const stopReason of ["error", "aborted"]) {
+  test(`preserves ${stopReason} alerts during a file-path workflow transition`, () => {
+    const h = subagentHarness("/sessions/parent-session.jsonl");
+    h.startRun();
+    h.notice();
+    h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+    h.startChild("next-workflow");
+    h.reply("The main agent needs attention.", stopReason);
+    h.settle();
+    assert.equal(h.commands.length, 1);
+  });
+}
+
+test("preserves questions during a file-path workflow transition", () => {
+  const h = subagentHarness("/sessions/parent-session.jsonl");
+  h.startRun();
+  h.notice();
+  h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+  h.startChild("next-workflow");
+  h.eventHandlers.get("rpiv:ask-user:prompt")?.({ questions: [{ question: "Continue?" }] });
+  h.reply("Waiting for the next workflow.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[5], "Question asked: Continue?");
+});
+
+test("preserves user input during a file-path workflow transition", () => {
+  const h = subagentHarness("/sessions/parent-session.jsonl");
+  h.startRun("Background task completed: **workflow**");
+  h.message({ role: "user", content: [{ type: "text", text: "Please continue." }] });
+  h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+  h.startChild("next-workflow");
+  h.reply("Continuing as requested.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
+
+test("notifies if new asynchronous work finishes before settling", () => {
+  const h = subagentHarness("/sessions/parent-session.jsonl");
+  h.startRun("Background task completed: **workflow**");
+  h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
+  h.startChild("next-workflow");
+  h.completeChild("next-workflow");
+  h.reply("All work is complete.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+});
 
 test("supports completion prompts without suppressing the last completion", () => {
   const h = subagentHarness();
