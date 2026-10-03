@@ -27,7 +27,7 @@ function messageText(message: unknown) {
 }
 
 // Extract the first line of an assistant response.
-function responseText(message: unknown) {
+function extractFirstResponseLine(message: unknown) {
   if ((message as { role?: unknown } | null)?.role !== "assistant") return "";
   return messageText(message).trim().split(/\r?\n/, 1)[0];
 }
@@ -53,7 +53,7 @@ function notifyTerminalNotifierUnavailable(notify: (message: string, level: "war
 // Notify when an agent finishes.
 function notifyAgentSettled(
   runCommand: RunCommand,
-  sessionTitle: string,
+  sessionSubtitle: string,
   response: string,
   onUnavailable: () => void,
 ) {
@@ -61,7 +61,7 @@ function notifyAgentSettled(
     "-title",
     "Pi",
     "-subtitle",
-    sessionTitle,
+    sessionSubtitle,
     "-message",
     response || "Session finished",
     "-sound",
@@ -74,7 +74,7 @@ function notifyAgentSettled(
 // Notify when a question requires an answer.
 function notifyQuestionAsked(
   runCommand: RunCommand,
-  sessionTitle: string,
+  sessionSubtitle: string,
   question: string,
   onUnavailable: () => void,
 ) {
@@ -82,7 +82,7 @@ function notifyQuestionAsked(
     "-title",
     "Pi",
     "-subtitle",
-    sessionTitle,
+    sessionSubtitle,
     "-message",
     question ? `Question asked: ${question}` : "Question asked",
     "-sound",
@@ -97,8 +97,8 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   if (dependencies.isSubagent ?? process.env.PI_SUBAGENT_CHILD === "1") return;
 
   const runCommand = dependencies.execFile ?? execFile;
-  let latestResponse = "";
-  let sessionId = "";
+  let notificationMessage = "";
+  let shortSessionId = "";
   const currentSessionIdentities = new Set<string>();
   const activeAsyncRuns = new Set<string>();
   let completionPrompt = false;
@@ -108,7 +108,7 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   let performedTools = false;
   let startedAsyncRun = false;
   let needsAttention = false;
-  let suppressCompletionNotification = false;
+  let completionTriggeredRun = false;
   // Limit missing-dependency reminders to one per session.
   let hasWarnedTerminalNotifierUnavailable = false;
 
@@ -118,13 +118,13 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     currentSessionIdentities.clear();
     currentSessionIdentities.add(currentSessionId);
     if (sessionFile) currentSessionIdentities.add(sessionFile);
-    sessionId = currentSessionId.slice(0, 7);
+    shortSessionId = currentSessionId.slice(0, 7);
     activeAsyncRuns.clear();
     completionPrompt = false;
     userPrompt = false;
     agentRunning = false;
     startedAsyncRun = false;
-    suppressCompletionNotification = false;
+    completionTriggeredRun = false;
     hasWarnedTerminalNotifierUnavailable = false;
     // Show a warning message if terminal-notifier is unavailable.
     await new Promise<void>((resolve) => {
@@ -159,9 +159,9 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   });
 
   pi.on("agent_start", () => {
-    latestResponse = "";
+    notificationMessage = "";
     agentRunning = true;
-    suppressCompletionNotification = completionPrompt;
+    completionTriggeredRun = completionPrompt;
     hasUserInput = userPrompt;
     performedTools = false;
     startedAsyncRun = false;
@@ -184,38 +184,38 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
         message.customType === "subagent-notify" ||
         message.customType === "subagent-incremental-child-notify"
       )) {
-        if (isAsyncCompletionPrompt(messageText(message))) suppressCompletionNotification = true;
+        if (isAsyncCompletionPrompt(messageText(message))) completionTriggeredRun = true;
         else needsAttention = true;
       }
       if (message.role === "assistant" && (
         message.stopReason === "error" || message.stopReason === "aborted"
       )) needsAttention = true;
     }
-    const response = responseText(message);
-    if (response) latestResponse = response;
+    const responseLine = extractFirstResponseLine(message);
+    if (responseLine) notificationMessage = responseLine;
   });
 
   pi.on("agent_settled", (_event, ctx) => {
     const sessionName = pi.getSessionName()?.trim();
-    const sessionTitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
+    const sessionSubtitle = sessionName || ctx.sessionManager.getSessionId().slice(0, 7);
     // Suppress completion wakes that continue asynchronous work.
-    const suppress = suppressCompletionNotification && activeAsyncRuns.size > 0 &&
+    const suppress = completionTriggeredRun && activeAsyncRuns.size > 0 &&
       !hasUserInput && (!performedTools || startedAsyncRun) && !needsAttention;
     if (!suppress) {
-      notifyAgentSettled(runCommand, sessionTitle, latestResponse, () => {
+      notifyAgentSettled(runCommand, sessionSubtitle, notificationMessage, () => {
         if (hasWarnedTerminalNotifierUnavailable) return;
         notifyTerminalNotifierUnavailable(ctx.ui.notify.bind(ctx.ui));
         hasWarnedTerminalNotifierUnavailable = true;
       });
     }
-    suppressCompletionNotification = false;
+    completionTriggeredRun = false;
     agentRunning = false;
   });
 
   pi.events.on("rpiv:ask-user:prompt", (raw) => {
     const event = raw as { questions?: Array<{ question?: unknown }> };
     const question = event.questions?.[0]?.question;
-    const sessionTitle = pi.getSessionName()?.trim() || sessionId;
-    notifyQuestionAsked(runCommand, sessionTitle, typeof question === "string" ? question : "", () => {});
+    const sessionSubtitle = pi.getSessionName()?.trim() || shortSessionId;
+    notifyQuestionAsked(runCommand, sessionSubtitle, typeof question === "string" ? question : "", () => {});
   });
 }

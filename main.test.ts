@@ -230,7 +230,7 @@ test("does not repeat the startup warning at completion", async () => {
   assert.equal(notifications.length, 2, "a new session must check and warn again");
 });
 
-function subagentHarness(sessionFile?: string) {
+function asyncRunHarness(sessionFile?: string) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const eventHandlers = new Map<string, (...args: unknown[]) => void>();
   const commands: string[][] = [];
@@ -242,7 +242,7 @@ function subagentHarness(sessionFile?: string) {
     ui: { notify: () => {} },
   };
   const pi = {
-    getSessionName: () => "Subagent tests",
+    getSessionName: () => "Async run tests",
     on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
     events: {
       on: (event: string, handler: (...args: unknown[]) => void) => eventHandlers.set(event, handler),
@@ -257,11 +257,11 @@ function subagentHarness(sessionFile?: string) {
   });
   const startSession = () => handlers.get("session_start")?.(undefined, context);
   startSession();
-  const startChild = (id: string, sessionId = sessionFile ?? "parent-session") =>
+  const startAsyncRun = (id: string, sessionId = sessionFile ?? "parent-session") =>
     eventHandlers.get("subagent:async-started")?.({ id, sessionId });
-  const completeChild = (runId: string, sessionId = sessionFile ?? "parent-session") =>
+  const completeAsyncRun = (runId: string, sessionId = sessionFile ?? "parent-session") =>
     eventHandlers.get("subagent:async-complete")?.({ runId, sessionId });
-  const startRun = (prompt?: string) => {
+  const startAgentRun = (prompt?: string) => {
     if (prompt !== undefined) handlers.get("before_agent_start")?.({ prompt });
     handlers.get("agent_start")?.();
   };
@@ -271,21 +271,21 @@ function subagentHarness(sessionFile?: string) {
   const reply = (text: string, stopReason = "stop") =>
     message({ role: "assistant", content: [{ type: "text", text }], stopReason });
   const settle = () => handlers.get("agent_settled")?.(undefined, context);
-  return { handlers, eventHandlers, commands, startSession, startChild, completeChild, startRun, message, notice, reply, settle };
+  return { handlers, eventHandlers, commands, startSession, startAsyncRun, completeAsyncRun, startAgentRun, message, notice, reply, settle };
 }
 
 test("suppresses intermediate custom-message wakes but allows the last completion", () => {
-  const h = subagentHarness();
-  h.startChild("a");
-  h.startChild("b");
-  h.completeChild("a");
-  h.startRun(); // Custom-message wakes bypass before_agent_start.
+  const h = asyncRunHarness();
+  h.startAsyncRun("a");
+  h.startAsyncRun("b");
+  h.completeAsyncRun("a");
+  h.startAgentRun(); // Custom-message wakes bypass before_agent_start.
   h.notice();
   h.reply("Worker A finished. Waiting for worker B.");
   h.settle();
   assert.equal(h.commands.length, 0);
-  h.completeChild("b");
-  h.startRun();
+  h.completeAsyncRun("b");
+  h.startAgentRun();
   h.notice();
   h.reply("All results have been aggregated.");
   h.settle();
@@ -299,9 +299,9 @@ for (const [text, customType] of [
   ["Background tasks completed (2): **a**, **b**", "subagent-notify"],
 ]) {
   test(`suppresses intermediate notices: ${text}`, () => {
-    const h = subagentHarness();
-    h.startChild("remaining");
-    h.startRun();
+    const h = asyncRunHarness();
+    h.startAsyncRun("remaining");
+    h.startAgentRun();
     h.notice(text, customType);
     h.reply("A child finished.");
     h.settle();
@@ -311,17 +311,17 @@ for (const [text, customType] of [
 
 for (const identity of ["parent-session", "/sessions/parent-session.jsonl"]) {
   test(`tracks completion events using session identity ${identity}`, () => {
-    const h = subagentHarness("/sessions/parent-session.jsonl");
-    h.startChild("a", identity);
-    h.startChild("b", identity);
-    h.completeChild("a", identity);
-    h.startRun();
+    const h = asyncRunHarness("/sessions/parent-session.jsonl");
+    h.startAsyncRun("a", identity);
+    h.startAsyncRun("b", identity);
+    h.completeAsyncRun("a", identity);
+    h.startAgentRun();
     h.notice();
     h.reply("Waiting for the remaining run.");
     h.settle();
     assert.equal(h.commands.length, 0);
-    h.completeChild("b", identity);
-    h.startRun();
+    h.completeAsyncRun("b", identity);
+    h.startAgentRun();
     h.notice();
     h.reply("All work is complete.");
     h.settle();
@@ -330,27 +330,27 @@ for (const identity of ["parent-session", "/sessions/parent-session.jsonl"]) {
 
   for (const wake of ["prompt", "custom"]) {
     test(`suppresses workflow transitions with ${wake} wakes and ${identity}`, () => {
-      const h = subagentHarness("/sessions/parent-session.jsonl");
+      const h = asyncRunHarness("/sessions/parent-session.jsonl");
       const startCompletion = () => {
-        h.startRun(wake === "prompt" ? "Background task completed: **workflow**" : undefined);
+        h.startAgentRun(wake === "prompt" ? "Background task completed: **workflow**" : undefined);
         if (wake === "custom") h.notice("Background task completed: **workflow**");
       };
-      h.startRun("Research rankings using two workflows.");
+      h.startAgentRun("Research rankings using two workflows.");
       h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-      h.startChild("workflow-1", identity);
+      h.startAsyncRun("workflow-1", identity);
       h.reply("Workflow 1 is running.");
       h.settle();
       assert.equal(h.commands.length, 1, "initial user-triggered reply must notify");
 
-      h.completeChild("workflow-1", identity);
+      h.completeAsyncRun("workflow-1", identity);
       startCompletion();
       h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-      h.startChild("workflow-2", identity);
+      h.startAsyncRun("workflow-2", identity);
       h.reply("Workflow 2 is running.");
       h.settle();
       assert.equal(h.commands.length, 1, "workflow transition must not notify");
 
-      h.completeChild("workflow-2", identity);
+      h.completeAsyncRun("workflow-2", identity);
       startCompletion();
       h.handlers.get("tool_execution_start")?.({ toolName: "read" });
       h.reply("The checked comparison is complete.");
@@ -362,17 +362,17 @@ for (const identity of ["parent-session", "/sessions/parent-session.jsonl"]) {
 }
 
 test("ignores another session's file-path lifecycle events", () => {
-  const h = subagentHarness("/sessions/parent-session.jsonl");
-  h.startChild("other", "/sessions/other-session.jsonl");
-  h.startRun();
+  const h = asyncRunHarness("/sessions/parent-session.jsonl");
+  h.startAsyncRun("other", "/sessions/other-session.jsonl");
+  h.startAgentRun();
   h.notice();
   h.reply("All done.");
   h.settle();
   assert.equal(h.commands.length, 1);
 
-  h.startChild("local");
-  h.completeChild("local", "/sessions/other-session.jsonl");
-  h.startRun();
+  h.startAsyncRun("local");
+  h.completeAsyncRun("local", "/sessions/other-session.jsonl");
+  h.startAgentRun();
   h.notice();
   h.reply("Still waiting for local work.");
   h.settle();
@@ -380,16 +380,16 @@ test("ignores another session's file-path lifecycle events", () => {
 });
 
 test("resets asynchronous start tracking before later tool work", () => {
-  const h = subagentHarness("/sessions/parent-session.jsonl");
-  h.startRun();
+  const h = asyncRunHarness("/sessions/parent-session.jsonl");
+  h.startAgentRun();
   h.notice();
   h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-  h.startChild("next-workflow");
+  h.startAsyncRun("next-workflow");
   h.reply("The next workflow is running.");
   h.settle();
   assert.equal(h.commands.length, 0);
 
-  h.startRun();
+  h.startAgentRun();
   h.notice();
   h.handlers.get("tool_execution_start")?.({ toolName: "write" });
   h.reply("Updated the combined report.");
@@ -399,11 +399,11 @@ test("resets asynchronous start tracking before later tool work", () => {
 
 for (const stopReason of ["error", "aborted"]) {
   test(`preserves ${stopReason} alerts during a file-path workflow transition`, () => {
-    const h = subagentHarness("/sessions/parent-session.jsonl");
-    h.startRun();
+    const h = asyncRunHarness("/sessions/parent-session.jsonl");
+    h.startAgentRun();
     h.notice();
     h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-    h.startChild("next-workflow");
+    h.startAsyncRun("next-workflow");
     h.reply("The main agent needs attention.", stopReason);
     h.settle();
     assert.equal(h.commands.length, 1);
@@ -411,11 +411,11 @@ for (const stopReason of ["error", "aborted"]) {
 }
 
 test("preserves questions during a file-path workflow transition", () => {
-  const h = subagentHarness("/sessions/parent-session.jsonl");
-  h.startRun();
+  const h = asyncRunHarness("/sessions/parent-session.jsonl");
+  h.startAgentRun();
   h.notice();
   h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-  h.startChild("next-workflow");
+  h.startAsyncRun("next-workflow");
   h.eventHandlers.get("rpiv:ask-user:prompt")?.({ questions: [{ question: "Continue?" }] });
   h.reply("Waiting for the next workflow.");
   h.settle();
@@ -424,36 +424,36 @@ test("preserves questions during a file-path workflow transition", () => {
 });
 
 test("preserves user input during a file-path workflow transition", () => {
-  const h = subagentHarness("/sessions/parent-session.jsonl");
-  h.startRun("Background task completed: **workflow**");
+  const h = asyncRunHarness("/sessions/parent-session.jsonl");
+  h.startAgentRun("Background task completed: **workflow**");
   h.message({ role: "user", content: [{ type: "text", text: "Please continue." }] });
   h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-  h.startChild("next-workflow");
+  h.startAsyncRun("next-workflow");
   h.reply("Continuing as requested.");
   h.settle();
   assert.equal(h.commands.length, 1);
 });
 
 test("notifies if new asynchronous work finishes before settling", () => {
-  const h = subagentHarness("/sessions/parent-session.jsonl");
-  h.startRun("Background task completed: **workflow**");
+  const h = asyncRunHarness("/sessions/parent-session.jsonl");
+  h.startAgentRun("Background task completed: **workflow**");
   h.handlers.get("tool_execution_start")?.({ toolName: "subagent" });
-  h.startChild("next-workflow");
-  h.completeChild("next-workflow");
+  h.startAsyncRun("next-workflow");
+  h.completeAsyncRun("next-workflow");
   h.reply("All work is complete.");
   h.settle();
   assert.equal(h.commands.length, 1);
 });
 
 test("supports completion prompts without suppressing the last completion", () => {
-  const h = subagentHarness();
-  h.startChild("remaining");
-  h.startRun("Workflow child completed: worker");
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
+  h.startAgentRun("Workflow child completed: worker");
   h.reply("Waiting for the remaining child.");
   h.settle();
   assert.equal(h.commands.length, 0);
-  h.completeChild("remaining");
-  h.startRun("Workflow child completed: worker");
+  h.completeAsyncRun("remaining");
+  h.startAgentRun("Workflow child completed: worker");
   h.reply("The task is complete.");
   h.settle();
   assert.equal(h.commands.length, 1);
@@ -461,9 +461,9 @@ test("supports completion prompts without suppressing the last completion", () =
 
 for (const userFirst of [false, true]) {
   test(`preserves user-triggered notifications with a completion notice, userFirst=${userFirst}`, () => {
-    const h = subagentHarness();
-    h.startChild("remaining");
-    h.startRun("Please review these results.");
+    const h = asyncRunHarness();
+    h.startAsyncRun("remaining");
+    h.startAgentRun("Please review these results.");
     const userMessage = () => h.message({ role: "user", content: [{ type: "text", text: "Please review these results." }] });
     if (userFirst) userMessage();
     h.notice();
@@ -475,9 +475,9 @@ for (const userFirst of [false, true]) {
 }
 
 test("preserves notifications when the main agent uses tools", () => {
-  const h = subagentHarness();
-  h.startChild("remaining");
-  h.startRun();
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
+  h.startAgentRun();
   h.notice();
   h.handlers.get("tool_execution_start")?.({ toolName: "write" });
   h.reply("Updated the combined report.");
@@ -486,9 +486,9 @@ test("preserves notifications when the main agent uses tools", () => {
 });
 
 test("preserves question alerts during an intermediate completion run", () => {
-  const h = subagentHarness();
-  h.startChild("remaining");
-  h.startRun();
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
+  h.startAgentRun();
   h.notice();
   h.eventHandlers.get("rpiv:ask-user:prompt")?.({ questions: [{ question: "Continue?" }] });
   assert.equal(h.commands.length, 1);
@@ -497,9 +497,9 @@ test("preserves question alerts during an intermediate completion run", () => {
 
 for (const text of ["Background task failed: **worker**", "Workflow child paused (needs attention): **worker**"]) {
   test(`preserves attention notifications: ${text}`, () => {
-    const h = subagentHarness();
-    h.startChild("remaining");
-    h.startRun();
+    const h = asyncRunHarness();
+    h.startAsyncRun("remaining");
+    h.startAgentRun();
     h.notice();
     h.notice(text);
     h.reply("A child needs attention.");
@@ -510,9 +510,9 @@ for (const text of ["Background task failed: **worker**", "Workflow child paused
 
 for (const stopReason of ["error", "aborted"]) {
   test(`preserves main-agent notifications after ${stopReason}`, () => {
-    const h = subagentHarness();
-    h.startChild("remaining");
-    h.startRun();
+    const h = asyncRunHarness();
+    h.startAsyncRun("remaining");
+    h.startAgentRun();
     h.notice();
     h.reply("The run did not finish normally.", stopReason);
     h.settle();
@@ -521,16 +521,16 @@ for (const stopReason of ["error", "aborted"]) {
 }
 
 test("ignores asynchronous run lifecycle events from other sessions", () => {
-  const h = subagentHarness();
-  h.startChild("other", "another-session");
-  h.startRun();
+  const h = asyncRunHarness();
+  h.startAsyncRun("other", "another-session");
+  h.startAgentRun();
   h.notice();
   h.reply("All done.");
   h.settle();
   assert.equal(h.commands.length, 1);
-  h.startChild("local");
-  h.completeChild("local", "another-session");
-  h.startRun();
+  h.startAsyncRun("local");
+  h.completeAsyncRun("local", "another-session");
+  h.startAgentRun();
   h.notice();
   h.reply("Still waiting for the local child.");
   h.settle();
@@ -538,10 +538,10 @@ test("ignores asynchronous run lifecycle events from other sessions", () => {
 });
 
 test("clears pending asynchronous runs when the session changes", () => {
-  const h = subagentHarness();
-  h.startChild("remaining");
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
   h.startSession();
-  h.startRun();
+  h.startAgentRun();
   h.notice();
   h.reply("No pending children in this session.");
   h.settle();
@@ -549,10 +549,10 @@ test("clears pending asynchronous runs when the session changes", () => {
 });
 
 test("does not let an idle completion notice suppress a later normal run", () => {
-  const h = subagentHarness();
-  h.startChild("remaining");
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
   h.notice();
-  h.startRun();
+  h.startAgentRun();
   h.reply("Normal work is done.");
   h.settle();
   assert.equal(h.commands.length, 1);
