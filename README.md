@@ -4,11 +4,11 @@
 
 ---
 
-This repository contains a Pi extension that sends macOS notifications.
+This repository contains a Pi extension that sends macOS notifications and integrates with selected popular [community extensions](https://pi.dev/packages).
 
 - Notify when the main agent becomes idle
-- Notify when the main agent needs attention through a [supported extension](#supported-extensions)
-- Suppress noisy notifications from subagents
+- Notify when [@juicesharp/rpiv-ask-user-question](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question) asks a question
+- Suppress intermediate completion notifications from asynchronous subagent runs and workflow transitions with [pi-subagents](https://pi.dev/packages/pi-subagents)
 
 Notifications include the session name or a short session ID, along with relevant context such as the first line of Pi's response.
 
@@ -24,9 +24,3 @@ Notifications include the session name or a short session ID, along with relevan
    Install https://github.com/mr-yifeiwang/pi-notifier
    ```
 1. Reload Pi.
-
-## Supported Extensions
-
-Pi Notifier includes dedicated support for the following extensions:
-
-- [@juicesharp/rpiv-ask-user-question](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question): Notify when the agent is asking a question
