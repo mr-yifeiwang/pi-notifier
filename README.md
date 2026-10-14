@@ -22,6 +22,6 @@ Notifications include the session name or a short session ID, along with relevan
 
 1. Type the following in Pi:
    ```txt
-   Install https://github.com/mr-yifeiwang/pi-notifier
+   Install pi-notifier using git:github.com/mr-yifeiwang/pi-notifier
    ```
-1. Reload Pi.
+2. Reload Pi.
