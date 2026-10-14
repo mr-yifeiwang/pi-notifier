@@ -92,7 +92,46 @@ function notifyQuestionAsked(
   });
 }
 
-// Register completion notifications with Pi.
+// Format permission prompts for a concise notification.
+function permissionPromptText(raw: unknown) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
+  const event = raw as {
+    requestId?: unknown;
+    surface?: unknown;
+    value?: unknown;
+    forwarding?: { requesterAgentName?: unknown } | null;
+  };
+  if (typeof event.requestId !== "string" || !event.requestId.trim()) return;
+
+  const text = (value: unknown) => typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  const requester = text(event.forwarding?.requesterAgentName);
+  const detail = [text(event.surface), text(event.value)].filter(Boolean).join(": ");
+  const message = `Permission required${requester ? ` (${requester})` : ""}${detail ? `: ${detail}` : ""}`;
+  return message.length > 200 ? `${message.slice(0, 199)}…` : message;
+}
+
+// Notify when a permission dialog requires an answer.
+function notifyPermissionAsked(
+  runCommand: RunCommand,
+  sessionSubtitle: string,
+  message: string,
+  onUnavailable: () => void,
+) {
+  runCommand("terminal-notifier", [
+    "-title",
+    "Pi",
+    "-subtitle",
+    sessionSubtitle,
+    "-message",
+    message,
+    "-sound",
+    "Submarine",
+  ], (error) => {
+    if (isTerminalNotifierUnavailable(error)) onUnavailable();
+  });
+}
+
+// Register notification handlers with Pi.
 export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   if (dependencies.isSubagent ?? process.env.PI_SUBAGENT_CHILD === "1") return;
 
@@ -210,6 +249,13 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     }
     completionTriggeredRun = false;
     agentRunning = false;
+  });
+
+  pi.events.on("permissions:ui_prompt", (raw) => {
+    const message = permissionPromptText(raw);
+    if (!message) return;
+    const sessionSubtitle = pi.getSessionName()?.trim() || shortSessionId;
+    notifyPermissionAsked(runCommand, sessionSubtitle, message, () => {});
   });
 
   pi.events.on("rpiv:ask-user:prompt", (raw) => {

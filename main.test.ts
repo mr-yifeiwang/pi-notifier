@@ -230,7 +230,7 @@ test("does not repeat the startup warning at completion", async () => {
   assert.equal(notifications.length, 2, "a new session must check and warn again");
 });
 
-function asyncRunHarness(sessionFile?: string) {
+function asyncRunHarness(sessionFile?: string, sessionName: string | null = "Async run tests") {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const eventHandlers = new Map<string, (...args: unknown[]) => void>();
   const commands: string[][] = [];
@@ -242,7 +242,7 @@ function asyncRunHarness(sessionFile?: string) {
     ui: { notify: () => {} },
   };
   const pi = {
-    getSessionName: () => "Async run tests",
+    getSessionName: () => sessionName ?? undefined,
     on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
     events: {
       on: (event: string, handler: (...args: unknown[]) => void) => eventHandlers.set(event, handler),
@@ -273,6 +273,123 @@ function asyncRunHarness(sessionFile?: string) {
   const settle = () => handlers.get("agent_settled")?.(undefined, context);
   return { handlers, eventHandlers, commands, startSession, startAsyncRun, completeAsyncRun, startAgentRun, message, notice, reply, settle };
 }
+
+test("notifies when the permission system presents a dialog", () => {
+  const h = asyncRunHarness(undefined, " Permission tests ");
+  h.eventHandlers.get("permissions:ui_prompt")?.({
+    requestId: "permission-1",
+    source: "tool_call",
+    surface: "bash",
+    value: "git push",
+    forwarding: null,
+  });
+  assert.deepEqual(h.commands, [[
+    "-title", "Pi",
+    "-subtitle", "Permission tests",
+    "-message", "Permission required: bash: git push",
+    "-sound", "Submarine",
+  ]]);
+});
+
+for (const [source, surface, value] of [
+  ["tool_call", "read", "/private/report.txt"],
+  ["skill_input", "skill", "security-audit"],
+  ["skill_read", "skill", "docx"],
+]) {
+  test(`notifies for permission source ${source} on ${surface}`, () => {
+    const h = asyncRunHarness();
+    h.eventHandlers.get("permissions:ui_prompt")?.({ requestId: "permission-1", source, surface, value });
+    assert.equal(h.commands[0]?.[5], `Permission required: ${surface}: ${value}`);
+  });
+}
+
+for (const name of [null, "   "]) {
+  test(`uses the short session ID for permission prompts with name ${name}`, () => {
+    const h = asyncRunHarness(undefined, name);
+    h.eventHandlers.get("permissions:ui_prompt")?.({ requestId: "permission-1" });
+    assert.equal(h.commands[0]?.[3], "parent-");
+  });
+}
+
+for (const [surface, value, expected] of [
+  [null, null, "Permission required"],
+  ["bash", null, "Permission required: bash"],
+  [null, "/private/report.txt", "Permission required: /private/report.txt"],
+  [42, { command: "ignored" }, "Permission required"],
+  ["  bash\n", "git\n push\t origin", "Permission required: bash: git push origin"],
+]) {
+  test(`formats permission prompt as ${expected}`, () => {
+    const h = asyncRunHarness();
+    h.eventHandlers.get("permissions:ui_prompt")?.({ requestId: "permission-1", surface, value });
+    assert.equal(h.commands[0]?.[5], expected);
+  });
+}
+
+for (const raw of [null, undefined, true, 42, "invalid", [], {}, { requestId: 42 }, { requestId: "" }]) {
+  test(`ignores malformed permission event ${JSON.stringify(raw)}`, () => {
+    const h = asyncRunHarness();
+    assert.doesNotThrow(() => h.eventHandlers.get("permissions:ui_prompt")?.(raw));
+    assert.equal(h.commands.length, 0);
+  });
+}
+
+test("notifies the parent about a forwarded permission request", () => {
+  const h = asyncRunHarness();
+  h.eventHandlers.get("permissions:ui_prompt")?.({
+    requestId: "forwarded-permission",
+    surface: "write",
+    value: "/private/report.txt",
+    forwarding: { requesterSessionId: "child-session", requesterAgentName: " worker " },
+  });
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[3], "Async run tests");
+  assert.equal(h.commands[0]?.[5], "Permission required (worker): write: /private/report.txt");
+});
+
+for (const forwarding of [null, {}, { requesterAgentName: null }, { requesterAgentName: 42 }, "invalid"]) {
+  test(`handles permission forwarding metadata ${JSON.stringify(forwarding)}`, () => {
+    const h = asyncRunHarness();
+    h.eventHandlers.get("permissions:ui_prompt")?.({ requestId: "permission-1", surface: "bash", forwarding });
+    assert.equal(h.commands[0]?.[5], "Permission required: bash");
+  });
+}
+
+test("bounds permission text without exposing nested request details", () => {
+  const h = asyncRunHarness();
+  h.eventHandlers.get("permissions:ui_prompt")?.({
+    requestId: "permission-1",
+    surface: "bash",
+    value: "x".repeat(500),
+    request: { request: { secret: "do not display" } },
+  });
+  const message = h.commands[0]?.[5];
+  assert.equal(message, `Permission required: bash: ${"x".repeat(172)}…`);
+  assert.equal(message?.length, 200);
+});
+
+test("permission alerts remain active during suppressed workflow completions", () => {
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
+  h.startAgentRun();
+  h.notice();
+  h.eventHandlers.get("permissions:ui_prompt")?.({ requestId: "permission-1", surface: "bash", value: "git push" });
+  h.reply("Waiting for remaining work.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[5], "Permission required: bash: git push");
+});
+
+test("notifies only when each permission dialog is presented", () => {
+  const h = asyncRunHarness();
+  const emit = (name: string, requestId: string) => h.eventHandlers.get(name)?.({ requestId });
+  emit("permissions:decision", "automatic-allow");
+  emit("permissions:decision", "automatic-deny");
+  assert.equal(h.commands.length, 0);
+  emit("permissions:ui_prompt", "permission-1");
+  assert.equal(h.commands.length, 1);
+  emit("permissions:ui_prompt", "permission-2");
+  assert.equal(h.commands.length, 2);
+});
 
 test("suppresses intermediate custom-message wakes but allows the last completion", () => {
   const h = asyncRunHarness();
