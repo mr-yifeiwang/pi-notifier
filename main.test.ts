@@ -230,11 +230,12 @@ test("does not repeat the startup warning at completion", async () => {
   assert.equal(notifications.length, 2, "a new session must check and warn again");
 });
 
-function asyncRunHarness(sessionFile?: string, sessionName: string | null = "Async run tests") {
+function asyncRunHarness(sessionFile?: string, sessionName: string | null = "Async run tests", goalInstalled = false) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const eventHandlers = new Map<string, (...args: unknown[]) => void>();
   const commands: string[][] = [];
   const context = {
+    hasUI: true,
     sessionManager: {
       getSessionId: () => "parent-session",
       getSessionFile: () => sessionFile,
@@ -243,6 +244,7 @@ function asyncRunHarness(sessionFile?: string, sessionName: string | null = "Asy
   };
   const pi = {
     getSessionName: () => sessionName ?? undefined,
+    getAllTools: () => goalInstalled ? [{ name: "goal_question" }] : [],
     on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
     events: {
       on: (event: string, handler: (...args: unknown[]) => void) => eventHandlers.set(event, handler),
@@ -271,7 +273,7 @@ function asyncRunHarness(sessionFile?: string, sessionName: string | null = "Asy
   const reply = (text: string, stopReason = "stop") =>
     message({ role: "assistant", content: [{ type: "text", text }], stopReason });
   const settle = () => handlers.get("agent_settled")?.(undefined, context);
-  return { handlers, eventHandlers, commands, startSession, startAsyncRun, completeAsyncRun, startAgentRun, message, notice, reply, settle };
+  return { handlers, eventHandlers, commands, context, startSession, startAsyncRun, completeAsyncRun, startAgentRun, message, notice, reply, settle };
 }
 
 test("notifies when the permission system presents a dialog", () => {
@@ -673,6 +675,178 @@ test("does not let an idle completion notice suppress a later normal run", () =>
   h.reply("Normal work is done.");
   h.settle();
   assert.equal(h.commands.length, 1);
+});
+
+for (const [toolName, args, expected] of [
+  ["goal_question", { question: "Which approach?" }, "Question asked: Which approach?"],
+  ["goal_questionnaire", { questions: [{ question: "Which platform?" }, { question: "Which theme?" }] }, "Question asked: Which platform?"],
+  ["propose_goal_draft", { objective: "Ship CSV export\nWith tests" }, "Goal confirmation required: Ship CSV export"],
+  ["set_goal_tasks", { tasks: [] }, "Goal task confirmation required"],
+] as const) {
+  test(`notifies when pi-goal-x starts ${toolName}`, () => {
+    const h = asyncRunHarness(undefined, " Goal tests ", true);
+    h.startAgentRun();
+    h.handlers.get("tool_execution_start")?.({ toolName, args }, { ...h.context, hasUI: true });
+    assert.deepEqual(h.commands, [[
+      "-title", "Pi", "-subtitle", "Goal tests", "-message", expected, "-sound", "Submarine",
+    ]]);
+  });
+}
+
+for (const args of [undefined, null, {}, { question: 42 }, { questions: null }, { questions: [null] }]) {
+  test(`handles malformed goal question input ${JSON.stringify(args)}`, () => {
+    const h = asyncRunHarness(undefined, null, true);
+    assert.doesNotThrow(() => h.handlers.get("tool_execution_start")?.({ toolName: "goal_questionnaire", args }, { ...h.context, hasUI: true }));
+    assert.equal(h.commands[0]?.[3], "parent-");
+    assert.equal(h.commands[0]?.[5], "Question asked");
+  });
+}
+
+test("does not alert for goal tools without a UI or unrelated tools", () => {
+  const h = asyncRunHarness(undefined, null, true);
+  h.handlers.get("tool_execution_start")?.({ toolName: "goal_question", args: { question: "Continue?" } }, { ...h.context, hasUI: false });
+  h.handlers.get("tool_execution_start")?.({ toolName: "get_goal", args: {} }, { ...h.context, hasUI: true });
+  assert.equal(h.commands.length, 0);
+});
+
+test("skips automatic confirmations while keeping goal questions active", (t) => {
+  const original = process.env.PI_GOAL_AUTO_CONFIRM;
+  process.env.PI_GOAL_AUTO_CONFIRM = "1";
+  t.after(() => {
+    if (original === undefined) delete process.env.PI_GOAL_AUTO_CONFIRM;
+    else process.env.PI_GOAL_AUTO_CONFIRM = original;
+  });
+  const h = asyncRunHarness(undefined, null, true);
+  for (const toolName of ["propose_goal_draft", "set_goal_tasks", "goal_question"]) {
+    h.handlers.get("tool_execution_start")?.({ toolName, args: {} }, h.context);
+  }
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[5], "Question asked");
+});
+
+test("delivers headless completion alerts without waiting for timers", () => {
+  const h = asyncRunHarness(undefined, null, true);
+  h.reply("Headless goal completed.");
+  h.handlers.get("agent_settled")?.(undefined, { ...h.context, hasUI: false });
+  assert.equal(h.commands.length, 1);
+});
+
+function goalCheckpoint(h: ReturnType<typeof asyncRunHarness>, details: unknown = { version: 3, kind: "checkpoint", goalId: "goal-1" }) {
+  h.handlers.get("message_start")?.({ message: { role: "custom", customType: "pi-goal-event", details } });
+}
+
+test("suppresses immediate goal continuation completions and notifies the final result", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = asyncRunHarness(undefined, null, true);
+  h.startAgentRun("Implement the goal.");
+  h.reply("Continuing with the next task.");
+  h.settle();
+  assert.equal(h.commands.length, 0);
+  t.mock.timers.tick(50);
+  h.startAgentRun();
+  goalCheckpoint(h);
+  t.mock.timers.tick(250);
+  assert.equal(h.commands.length, 0);
+  h.reply("Goal completed.");
+  h.settle();
+  t.mock.timers.tick(250);
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.commands[0]?.[5], "Goal completed.");
+});
+
+test("notifies conservatively when a continuation arrives after the grace period", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = asyncRunHarness(undefined, null, true);
+  h.reply("Waiting on external work.");
+  h.settle();
+  t.mock.timers.tick(250);
+  goalCheckpoint(h);
+  assert.equal(h.commands.length, 1);
+});
+
+test("ignores audit and unrelated custom messages during the grace period", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = asyncRunHarness(undefined, null, true);
+  h.reply("Final answer.");
+  h.settle();
+  for (const customType of ["pi-goal-audit-event", "other-extension"]) {
+    h.handlers.get("message_start")?.({ message: {
+      role: "custom", customType, details: { kind: "checkpoint", goalId: "goal-1" },
+    } });
+  }
+  t.mock.timers.tick(250);
+  assert.equal(h.commands.length, 1);
+});
+
+test("preserves the captured completion text across a later agent start", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = asyncRunHarness(undefined, null, true);
+  h.reply("Earlier result.");
+  h.settle();
+  h.startAgentRun();
+  h.reply("New result.");
+  t.mock.timers.tick(250);
+  assert.equal(h.commands[0]?.[5], "Earlier result.");
+});
+
+for (const details of [null, {}, { kind: "checkpoint" }, { kind: "checkpoint", goalId: " " }, { kind: "audit", goalId: "goal-1" }]) {
+  test(`does not suppress completion for malformed goal checkpoint ${JSON.stringify(details)}`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const h = asyncRunHarness(undefined, null, true);
+    h.reply("Goal is paused or waiting.");
+    h.settle();
+    goalCheckpoint(h, details);
+    t.mock.timers.tick(250);
+    assert.equal(h.commands.length, 1);
+  });
+}
+
+for (const stopReason of ["error", "aborted"]) {
+  test(`preserves immediate ${stopReason} goal alerts`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const h = asyncRunHarness(undefined, null, true);
+    h.startAgentRun();
+    h.reply("The goal needs attention.", stopReason);
+    h.settle();
+    goalCheckpoint(h);
+    t.mock.timers.tick(250);
+    assert.equal(h.commands.length, 1);
+  });
+}
+
+for (const event of ["session_start", "session_shutdown"]) {
+  test(`cancels pending goal completion alerts on ${event}`, (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const h = asyncRunHarness(undefined, null, true);
+    h.reply("Old session result.");
+    h.settle();
+    h.handlers.get(event)?.(undefined, h.context);
+    t.mock.timers.tick(250);
+    assert.equal(h.commands.length, 0);
+  });
+}
+
+test("keeps user-triggered completion alerts when a goal checkpoint follows", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = asyncRunHarness(undefined, null, true);
+  h.reply("Your requested review is complete.");
+  h.settle();
+  h.handlers.get("message_start")?.({ message: { role: "user", content: "Next request" } });
+  goalCheckpoint(h);
+  t.mock.timers.tick(250);
+  assert.equal(h.commands.length, 1);
+});
+
+test("retains async subagent suppression with pi-goal-x installed", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = asyncRunHarness(undefined, null, true);
+  h.startAsyncRun("remaining");
+  h.startAgentRun();
+  h.notice();
+  h.reply("Still waiting for the worker.");
+  h.settle();
+  t.mock.timers.tick(250);
+  assert.equal(h.commands.length, 0);
 });
 
 test("does not register notifications in subagent processes", () => {

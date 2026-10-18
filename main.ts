@@ -92,6 +92,28 @@ function notifyQuestionAsked(
   });
 }
 
+// Notify when a goal proposal requires confirmation.
+function notifyGoalConfirmationAsked(
+  runCommand: RunCommand,
+  sessionSubtitle: string,
+  message: string,
+) {
+  runCommand("terminal-notifier", [
+    "-title", "Pi",
+    "-subtitle", sessionSubtitle,
+    "-message", message,
+    "-sound", "Submarine",
+  ], () => {});
+}
+
+// Match delivered goal checkpoints, not audit messages.
+function isGoalCheckpoint(message: unknown) {
+  const raw = message as { role?: unknown; customType?: unknown; details?: { kind?: unknown; goalId?: unknown } | null } | null;
+  return raw?.role === "custom" && raw.customType === "pi-goal-event" &&
+    raw.details?.kind === "checkpoint" && typeof raw.details.goalId === "string" &&
+    raw.details.goalId.trim().length > 0;
+}
+
 // Format permission prompts for a concise notification.
 function permissionPromptText(raw: unknown) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
@@ -150,8 +172,21 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   let completionTriggeredRun = false;
   // Limit missing-dependency reminders to one per session.
   let hasWarnedTerminalNotifierUnavailable = false;
+  let pendingCompletion: { timer: ReturnType<typeof setTimeout>; send: () => void } | undefined;
+
+  // Clear a deferred completion, optionally delivering it.
+  function clearPendingCompletion(deliver = false) {
+    const pending = pendingCompletion;
+    if (!pending) return;
+    pendingCompletion = undefined;
+    clearTimeout(pending.timer);
+    if (deliver) pending.send();
+  }
+
+  pi.on("session_shutdown", () => clearPendingCompletion());
 
   pi.on("session_start", async (_event, ctx) => {
+    clearPendingCompletion();
     const currentSessionId = ctx.sessionManager.getSessionId();
     const sessionFile = ctx.sessionManager.getSessionFile?.();
     currentSessionIdentities.clear();
@@ -209,8 +244,27 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     userPrompt = false;
   });
 
-  pi.on("tool_execution_start", () => {
+  pi.on("tool_execution_start", (event, ctx) => {
     if (agentRunning) performedTools = true;
+    if (!ctx?.hasUI) return;
+    const args = event.args as { question?: unknown; questions?: Array<{ question?: unknown } | null>; objective?: unknown } | null;
+    const subtitle = pi.getSessionName()?.trim() || shortSessionId;
+    if (event.toolName === "goal_question" || event.toolName === "goal_questionnaire") {
+      const question = event.toolName === "goal_question" ? args?.question : args?.questions?.[0]?.question;
+      notifyQuestionAsked(runCommand, subtitle, typeof question === "string" ? question : "", () => {});
+    } else if (process.env.PI_GOAL_AUTO_CONFIRM !== "1") {
+      if (event.toolName === "propose_goal_draft") {
+        const objective = typeof args?.objective === "string" ? args.objective.trim().split(/\r?\n/, 1)[0] : "";
+        notifyGoalConfirmationAsked(runCommand, subtitle, objective ? `Goal confirmation required: ${objective}` : "Goal confirmation required");
+      } else if (event.toolName === "set_goal_tasks") {
+        notifyGoalConfirmationAsked(runCommand, subtitle, "Goal task confirmation required");
+      }
+    }
+  });
+
+  pi.on("message_start", (event) => {
+    if (isGoalCheckpoint(event.message)) clearPendingCompletion();
+    else if (event.message.role === "user") clearPendingCompletion(true);
   });
 
   pi.on("message_end", (event) => {
@@ -240,12 +294,25 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
     // Suppress completion wakes that continue asynchronous work.
     const suppress = completionTriggeredRun && activeAsyncRuns.size > 0 &&
       !hasUserInput && (!performedTools || startedAsyncRun) && !needsAttention;
+    clearPendingCompletion(true);
     if (!suppress) {
-      notifyAgentSettled(runCommand, sessionSubtitle, notificationMessage, () => {
+      const response = notificationMessage;
+      const send = () => notifyAgentSettled(runCommand, sessionSubtitle, response, () => {
         if (hasWarnedTerminalNotifierUnavailable) return;
         notifyTerminalNotifierUnavailable(ctx.ui.notify.bind(ctx.ui));
         hasWarnedTerminalNotifierUnavailable = true;
       });
+      // Allow an actual goal checkpoint to cancel an interim alert.
+      // Never infer continuation from an active goal alone.
+      const hasGoalExtension = pi.getAllTools?.().some((tool) => tool.name === "goal_question");
+      if (hasGoalExtension && ctx.hasUI && !needsAttention) {
+        const timer = setTimeout(() => {
+          pendingCompletion = undefined;
+          send();
+        }, 250);
+        timer.unref?.();
+        pendingCompletion = { timer, send };
+      } else send();
     }
     completionTriggeredRun = false;
     agentRunning = false;
