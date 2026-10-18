@@ -6,11 +6,11 @@
 
 This repository contains a Pi extension that sends macOS notifications and integrates with selected popular [community extensions](https://pi.dev/packages).
 
-- Notify when the main agent becomes idle
-- Notify when [@juicesharp/rpiv-ask-user-question](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question) asks a question
-- Notify when [@gotgenes/pi-permission-system](https://pi.dev/packages/@gotgenes/pi-permission-system) presents a permission dialog
-- Notify when [pi-goal-x](https://pi.dev/packages/pi-goal-x) starts a question, questionnaire, goal proposal, or task-list confirmation
-- Suppress intermediate completion notifications from asynchronous subagent runs and workflow transitions with [pi-subagents](https://pi.dev/packages/pi-subagents)
+- [1.0.0] Notify when the main agent becomes idle
+- [1.0.0] Notify when [@juicesharp/rpiv-ask-user-question](https://pi.dev/packages/@juicesharp/rpiv-ask-user-question) asks a question
+- [1.0.3] Suppress intermediate completion notifications from asynchronous subagent runs and workflow transitions with [pi-subagents](https://pi.dev/packages/pi-subagents)
+- [1.1.0] Notify when [@gotgenes/pi-permission-system](https://pi.dev/packages/@gotgenes/pi-permission-system) presents a permission dialog
+- [1.2.0] Notify when [pi-goal-x](https://pi.dev/packages/pi-goal-x) presents a question, questionnaire, goal proposal, or task-list confirmation
 
 Notifications include the session name or a short session ID, along with relevant context such as the first line of Pi's response.
 
