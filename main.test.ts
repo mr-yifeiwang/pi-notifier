@@ -129,7 +129,7 @@ test("notifies for completion prompts when no asynchronous runs are tracked", ()
     execFile: (file, args) => commands.push([file, args]),
     isSubagent: false,
   });
-  handlers.get("before_agent_start")?.({ prompt: "Workflow child completed: Reuters report" });
+  handlers.get("before_agent_start")?.({ messageType: "user", prompt: "Workflow child completed: Reuters report" });
   handlers.get("agent_start")?.();
   handlers.get("agent_settled")?.(undefined, {
     sessionManager: { getSessionId: () => "abcdef0-1234-5678-9abc-def012345678" },
@@ -264,7 +264,7 @@ function asyncRunHarness(sessionFile?: string, sessionName: string | null = "Asy
   const completeAsyncRun = (runId: string, sessionId = sessionFile ?? "parent-session") =>
     eventHandlers.get("subagent:async-complete")?.({ runId, sessionId });
   const startAgentRun = (prompt?: string) => {
-    if (prompt !== undefined) handlers.get("before_agent_start")?.({ prompt });
+    if (prompt !== undefined) handlers.get("before_agent_start")?.({ messageType: "user", prompt });
     handlers.get("agent_start")?.();
   };
   const message = (message: unknown) => handlers.get("message_end")?.({ message });
@@ -391,6 +391,32 @@ test("notifies only when each permission dialog is presented", () => {
   assert.equal(h.commands.length, 1);
   emit("permissions:ui_prompt", "permission-2");
   assert.equal(h.commands.length, 2);
+});
+
+test("handles a custom completion wake before message events", () => {
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
+  h.handlers.get("before_agent_start")?.({
+    messageType: "custom",
+    message: { role: "custom", customType: "subagent-notify", content: "Background task completed: **worker**" },
+  });
+  h.startAgentRun();
+  h.reply("Still waiting for another worker.");
+  h.settle();
+  assert.equal(h.commands.length, 0);
+});
+
+test("handles unrelated custom wake messages without suppressing notifications", () => {
+  const h = asyncRunHarness();
+  h.startAsyncRun("remaining");
+  h.handlers.get("before_agent_start")?.({
+    messageType: "custom",
+    message: { role: "custom", customType: "other", content: "Background task completed: unrelated" },
+  });
+  h.startAgentRun();
+  h.reply("A different extension needs attention.");
+  h.settle();
+  assert.equal(h.commands.length, 1);
 });
 
 test("suppresses intermediate custom-message wakes but allows the last completion", () => {

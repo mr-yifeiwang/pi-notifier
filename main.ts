@@ -228,8 +228,15 @@ export default function (pi: ExtensionAPI, dependencies: Dependencies = {}) {
   });
 
   pi.on("before_agent_start", (event) => {
-    completionPrompt = isAsyncCompletionPrompt(event.prompt);
-    userPrompt = !completionPrompt;
+    if (event.messageType === "user") {
+      completionPrompt = isAsyncCompletionPrompt(event.prompt);
+      userPrompt = !completionPrompt;
+    } else {
+      completionPrompt = (event.message.customType === "subagent-notify" ||
+        event.message.customType === "subagent-incremental-child-notify") &&
+        isAsyncCompletionPrompt(messageText(event.message));
+      userPrompt = false;
+    }
   });
 
   pi.on("agent_start", () => {
