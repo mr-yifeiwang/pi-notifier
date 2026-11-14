@@ -1,5 +1,11 @@
 # Pi Notifier
 
+> [!WARNING]
+>
+> **Maintenance Notice:** As of November 14, 2026, the owner will no longer maintain this project for [Pi](https://pi.dev/) and prefers using [Oh My Pi (OMP)](https://omp.sh/). Compared to Pi's minimalist nature, OMP provides centralized notification management for commonly used agentic features.
+>
+> For a similar OMP plugin, see [`mr-yifeiwang/omp-custom-notifications`](https://github.com/mr-yifeiwang/omp-custom-notifications).
+
 [TOC]
 
 ---
